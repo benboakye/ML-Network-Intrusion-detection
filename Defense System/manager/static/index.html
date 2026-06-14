@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NID Manager</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>Network Intrusion Detection</h1>
+      </div>
+      <div class="header-actions">
+        <span id="capture-badge" class="badge badge-muted">Capture idle</span>
+        <button id="btn-refresh" class="btn btn-ghost">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="stats-grid">
+      <div class="stat-card">
+        <p class="stat-label">Agents Online</p>
+        <p class="stat-value" id="stat-agents-online">—</p>
+        <p class="stat-sub" id="stat-agents-total">of — registered</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-label">Total Alerts</p>
+        <p class="stat-value" id="stat-alerts-total">—</p>
+        <p class="stat-sub" id="stat-alerts-hour">— in last hour</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-label">Top Threat</p>
+        <p class="stat-value stat-value-sm" id="stat-top-threat">—</p>
+        <p class="stat-sub">most frequent class</p>
+      </div>
+    </section>
+
+    <section class="panel-row">
+      <div class="panel panel-wide">
+        <div class="panel-header">
+          <h2>Alerts by Class</h2>
+        </div>
+        <div id="chart-bars" class="chart-bars"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Capture</h2>
+        </div>
+        <p class="panel-desc">Start capture before running attack traffic from Kali.</p>
+        <div class="btn-row">
+          <button id="btn-capture-start" class="btn btn-primary">Start</button>
+          <button id="btn-capture-stop" class="btn btn-secondary">Stop</button>
+        </div>
+        <hr class="divider" />
+        <p class="panel-desc">Load sample alerts for UI demo (before ML is connected).</p>
+        <button id="btn-seed" class="btn btn-ghost btn-full">Seed Demo Alerts</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Registered Agents</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Hostname</th>
+              <th>IP</th>
+              <th>OS</th>
+              <th>Status</th>
+              <th>Last Seen</th>
+            </tr>
+          </thead>
+          <tbody id="agents-body">
+            <tr><td colspan="5" class="empty">No agents registered yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Recent Alerts</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Class</th>
+              <th>Source</th>
+              <th>Destination</th>
+              <th>Severity</th>
+              <th>Confidence</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody id="alerts-body">
+            <tr><td colspan="7" class="empty">No alerts yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    ML Network Intrusion Detection · Manager v0.1 · Lab use only
+  </footer>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
